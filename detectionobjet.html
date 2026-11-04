@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="UTF-8">
+    <title>TP MediaPipe - Détection d'objets</title>
+    <style>
+        .controls {
+            margin-bottom: 10px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .container {
+            position: relative;
+            width: 640px;
+            height: 480px;
+        }
+
+        video,
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 640px;
+            height: 480px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="controls">
+        <button id="toggleBtn">Démarrer la détection</button>
+
+        <label>Modèle :
+            <select id="modelSelect">
+                <option
+                    value="https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite">
+                    EfficientDet-Lite0 (Rapide)</option>
+                <option
+                    value="https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite2/float16/1/efficientdet_lite2.tflite">
+                    EfficientDet-Lite2 (Précis)</option>
+            </select>
+        </label>
+
+        <label>Max objets :
+            <input type="number" id="maxResultsInput" min="1" max="20" value="5" style="width: 50px;">
+        </label>
+
+        <label>Score min :
+            <input type="range" id="scoreThresholdInput" min="0.1" max="0.9" step="0.05" value="0.3">
+            <span id="scoreVal">0.30</span>
+        </label>
+    </div>
+
+    <div class="container">
+        <video id="webcam" autoplay playsinline></video>
+        <canvas id="output"></canvas>
+    </div>
+
+    <script type="module">
+        import { ObjectDetector, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest";
+
+        const video = document.getElementById("webcam");
+        const canvas = document.getElementById("output");
+        const ctx = canvas.getContext("2d");
+
+        const toggleBtn = document.getElementById("toggleBtn");
+        const modelSelect = document.getElementById("modelSelect");
+        const maxResultsInput = document.getElementById("maxResultsInput");
+        const scoreThresholdInput = document.getElementById("scoreThresholdInput");
+        const scoreVal = document.getElementById("scoreVal");
+
+        let objectDetector;
+        let visionResolver;
+        let isRunning = false;
+        let lastVideoTime = -1;
+
+        async function createDetector() {
+            if (!visionResolver) {
+                visionResolver = await FilesetResolver.forVisionTasks(
+                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+                );
+            }
+
+            if (objectDetector) {
+                objectDetector.close();
+            }
+
+            objectDetector = await ObjectDetector.createFromOptions(visionResolver, {
+                baseOptions: {
+                    modelAssetPath: modelSelect.value,
+                    delegate: "GPU"
+                },
+                runningMode: "VIDEO",
+                maxResults: parseInt(maxResultsInput.value, 10),
+                scoreThreshold: parseFloat(scoreThresholdInput.value)
+            });
+        }
+
+        async function init() {
+            await createDetector();
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
+            video.addEventListener("loadedmetadata", () => {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+            });
+        }
+
+        function predict() {
+            if (!isRunning) return;
+
+            if (video.currentTime !== lastVideoTime) {
+                lastVideoTime = video.currentTime;
+                const detections = objectDetector.detectForVideo(video, performance.now()).detections;
+
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                for (const detection of detections) {
+                    const { originX, originY, width, height } = detection.boundingBox;
+                    const category = detection.categories[0];
+                    const label = category.categoryName;
+                    const score = (category.score * 100).toFixed(1);
+
+                    ctx.strokeStyle = "#00FF00";
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(originX, originY, width, height);
+
+                    ctx.fillStyle = "#00FF00";
+                    ctx.font = "16px sans-serif";
+                    const text = `${label} (${score}%)`;
+                    const textWidth = ctx.measureText(text).width;
+
+                    ctx.fillRect(originX, originY > 25 ? originY - 25 : originY, textWidth + 10, 25);
+
+                    ctx.fillStyle = "#000000";
+                    ctx.fillText(text, originX + 5, originY > 25 ? originY - 7 : originY + 18);
+                }
+            }
+
+            requestAnimationFrame(predict);
+        }
+
+        toggleBtn.addEventListener("click", () => {
+            isRunning = !isRunning;
+            toggleBtn.textContent = isRunning ? "Stopper la détection" : "Reprendre la détection";
+            if (isRunning) predict();
+        });
+
+        modelSelect.addEventListener("change", async () => {
+            await createDetector();
+        });
+
+        maxResultsInput.addEventListener("change", async () => {
+            await createDetector();
+        });
+
+        scoreThresholdInput.addEventListener("input", async () => {
+            scoreVal.textContent = parseFloat(scoreThresholdInput.value).toFixed(2);
+            await createDetector();
+        });
+
+        init();
+    </script>
+</body>
+
+</html>
